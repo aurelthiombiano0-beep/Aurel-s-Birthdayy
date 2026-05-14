@@ -172,7 +172,7 @@ export default function App() {
           <div className="grid grid-cols-2 gap-y-8 gap-x-12 w-full max-w-sm mb-12">
             <DetailItemLabel label="Date" value="16 May 2026" delay={2.4} />
             <DetailItemLabel label="Time" value="19:00 — Late" delay={2.6} />
-            <DetailItemLabel label="Location" value="Secret location" delay={2.8} className="col-span-2" />
+            <DetailItemLabel label="Location" value="Azalaï Salle SEGTAABA" delay={2.8} className="col-span-2" />
           </div>
 
           <motion.div
@@ -244,10 +244,21 @@ export default function App() {
             <Map className="w-6 h-6 text-white/60" />
           </div>
           <h2 className="text-[10px] uppercase font-light tracking-[0.6em] text-white/40 mb-3">Location</h2>
-          <div className="space-y-2 mb-2">
-            <p className="text-xl font-light text-white tracking-wide animate-glow-pulse">📍 Secret location.</p>
-            <p className="text-sm font-light text-white/50 tracking-widest uppercase">Revealed tomorrow morning.</p>
+          <div className="space-y-4 mb-8">
+            <p className="text-xl font-light text-white tracking-wide">📍 Azalaï Hôtel — Salle SEGTAABA</p>
           </div>
+          
+          <motion.a
+            href="https://www.google.com/maps/search/?api=1&query=Azalaï+Hôtel+Ouagadougou"
+            target="_blank"
+            rel="noopener noreferrer"
+            whileHover={{ scale: 1.05 }}
+            whileTap={{ scale: 0.95 }}
+            className="flex items-center gap-3 px-8 py-3.5 bg-white/5 border border-white/10 rounded-full text-xs font-medium tracking-widest uppercase hover:bg-white/10 transition-all hover:border-white/30"
+          >
+            Open in Maps
+            <ArrowRight className="w-4 h-4 opacity-50" />
+          </motion.a>
         </div>
       </motion.section>
 
