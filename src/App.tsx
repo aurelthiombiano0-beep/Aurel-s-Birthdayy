@@ -4,12 +4,11 @@
  */
 
 import { motion, AnimatePresence } from "motion/react";
-import { Calendar, Clock, MapPin, QrCode, ArrowRight, Map, Camera, Play, LogIn, LogOut, Loader2, Maximize2, X as CloseIcon } from "lucide-react";
+import { Calendar, Clock, MapPin, QrCode, ArrowRight, Map, Camera, Play, Loader2, Maximize2, Trash2, X as CloseIcon } from "lucide-react";
 import React, { useEffect, useState, useMemo, useRef } from "react";
-import { auth, db, storage } from "./lib/firebase";
-import { onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut, User } from "firebase/auth";
-import { collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, Timestamp } from "firebase/firestore";
-import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import { db, storage } from "./lib/firebase";
+import { collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, Timestamp, deleteDoc, doc } from "firebase/firestore";
+import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 
 const Particle = ({ delay }: { delay: number, key?: any }) => {
   return (
@@ -81,23 +80,31 @@ interface Memory {
   url: string;
   type: 'image' | 'video';
   createdAt?: Timestamp;
-  authorId?: string;
+  firstName?: string;
+  lastName?: string;
+  authorSecret?: string;
 }
 
 export default function App() {
   const [mounted, setMounted] = useState(false);
   const [memories, setMemories] = useState<Memory[]>([]);
-  const [user, setUser] = useState<User | null>(null);
   const [uploading, setUploading] = useState(false);
   const [selectedMedia, setSelectedMedia] = useState<Memory | null>(null);
+  
+  // Anonymous Identity
+  const [firstName, setFirstName] = useState(localStorage.getItem('firstName') || "");
+  const [lastName, setLastName] = useState(localStorage.getItem('lastName') || "");
+  const [authorSecret] = useState(() => {
+    let secret = localStorage.getItem('authorSecret');
+    if (!secret) {
+      secret = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+      localStorage.setItem('authorSecret', secret);
+    }
+    return secret;
+  });
 
   useEffect(() => {
     setMounted(true);
-    
-    // Auth Listener
-    const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
-      setUser(currentUser);
-    });
 
     // Firestore Listener
     const q = query(collection(db, "memories"), orderBy("createdAt", "desc"));
@@ -110,30 +117,22 @@ export default function App() {
     });
 
     return () => {
-      unsubscribeAuth();
       unsubscribeFirestore();
     };
   }, []);
-
-  const handleLogin = async () => {
-    try {
-      const provider = new GoogleAuthProvider();
-      await signInWithPopup(auth, provider);
-    } catch (error) {
-      console.error("Login failed", error);
-    }
-  };
-
-  const handleLogout = () => signOut(auth);
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
-    if (!user) {
-      alert("Please login to share memories.");
+    if (!firstName.trim() || !lastName.trim()) {
+      alert("Please enter your name before sharing.");
       return;
     }
+
+    // Persist names
+    localStorage.setItem('firstName', firstName.trim());
+    localStorage.setItem('lastName', lastName.trim());
 
     setUploading(true);
     
@@ -150,8 +149,9 @@ export default function App() {
           url,
           type: fileType,
           createdAt: serverTimestamp(),
-          authorId: user.uid,
-          authorName: user.displayName
+          firstName: firstName.trim(),
+          lastName: lastName.trim(),
+          authorSecret: authorSecret
         });
       }
     } catch (error) {
@@ -160,6 +160,21 @@ export default function App() {
     } finally {
       setUploading(false);
       if (e.target) e.target.value = '';
+    }
+  };
+
+  const handleDelete = async (e: React.MouseEvent, memory: Memory) => {
+    e.stopPropagation();
+    if (!window.confirm("Are you sure you want to delete this memory?")) return;
+
+    try {
+      // 1. Delete from storage if possible (or just Firestore record)
+      // Usually storage delete needs the full path. If we don't store it, we just delete the doc.
+      // For this app, deleting the Firestore doc is enough to remove it from the album.
+      await deleteDoc(doc(db, "memories", memory.id));
+    } catch (error) {
+      console.error("Delete failed", error);
+      alert("Failed to delete memory.");
     }
   };
 
@@ -201,42 +216,10 @@ export default function App() {
         transition={{ duration: 1.2, ease: [0.16, 1, 0.3, 1] }}
         className="z-10 flex flex-col items-center space-y-4 mb-16 w-full max-w-[540px]"
       >
-        <div className="w-full flex justify-between items-center px-4">
-          <div className="flex-1" />
-          <div className="flex flex-col items-center space-y-4">
-            <div className="w-10 h-10 border border-white/20 rounded-full flex items-center justify-center bg-white/5 backdrop-blur-md">
-              <div className="w-4 h-4 bg-white rounded-full shadow-[0_0_10px_rgba(255,255,255,0.8)]"></div>
-            </div>
-            <span className="tracking-[0.6em] text-[10px] uppercase font-light opacity-60">Aurel Event</span>
-          </div>
-          <div className="flex-1 flex justify-end">
-            {user ? (
-              <button 
-                onClick={handleLogout}
-                className="group flex flex-col items-center space-y-1 opacity-40 hover:opacity-100 transition-opacity"
-              >
-                <div className="w-8 h-8 rounded-full border border-white/10 flex items-center justify-center bg-white/5 overflow-hidden">
-                  {user.photoURL ? (
-                    <img src={user.photoURL} alt={user.displayName || ""} className="w-full h-full object-cover" />
-                  ) : (
-                    <LogOut className="w-4 h-4 text-white" />
-                  )}
-                </div>
-                <span className="text-[7px] uppercase tracking-widest">Logout</span>
-              </button>
-            ) : (
-              <button 
-                onClick={handleLogin}
-                className="group flex flex-col items-center space-y-1 opacity-40 hover:opacity-100 transition-opacity"
-              >
-                <div className="w-8 h-8 rounded-full border border-white/10 flex items-center justify-center bg-white/5">
-                  <LogIn className="w-4 h-4 text-white" />
-                </div>
-                <span className="text-[7px] uppercase tracking-widest">Login</span>
-              </button>
-            )}
-          </div>
+        <div className="w-10 h-10 border border-white/20 rounded-full flex items-center justify-center bg-white/5 backdrop-blur-md">
+          <div className="w-4 h-4 bg-white rounded-full shadow-[0_0_10px_rgba(255,255,255,0.8)]"></div>
         </div>
+        <span className="tracking-[0.6em] text-[10px] uppercase font-light opacity-60">Aurel Event</span>
       </motion.header>
 
       {/* Main Content */}
@@ -388,15 +371,39 @@ export default function App() {
       >
         <div className="glass-card rounded-[48px] p-8 md:p-16 flex flex-col items-center overflow-hidden">
           <div className="text-center mb-12">
-            <p className="text-white/40 font-light italic text-sm tracking-widest mb-4">“Memories fade.<br/>Tonight lives forever.”</p>
+            <p className="text-white/40 font-light italic text-sm tracking-widest mb-4">“Share the memories of the night ✨”</p>
             <motion.h2 
               initial={{ opacity: 0, filter: "blur(10px)" }}
               whileInView={{ opacity: 1, filter: "blur(0px)" }}
               className="text-3xl md:text-4xl font-extralight tracking-tight text-white mb-4 glow-text"
             >
-              Memories Album ✨
+              Memories Album
             </motion.h2>
             <p className="text-white/30 font-light text-xs tracking-[0.3em] uppercase">Every moment. One shared album.</p>
+          </div>
+
+          {/* Name Selection Form */}
+          <div className="w-full max-w-sm mb-12 grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <label className="text-[8px] uppercase tracking-widest text-white/30 ml-2">First Name</label>
+              <input 
+                type="text" 
+                placeholder="Ex: John" 
+                value={firstName}
+                onChange={(e) => setFirstName(e.target.value)}
+                className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-xs outline-none focus:border-white/30 transition-all font-light"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-[8px] uppercase tracking-widest text-white/30 ml-2">Last Name</label>
+              <input 
+                type="text" 
+                placeholder="Ex: Doe" 
+                value={lastName}
+                onChange={(e) => setLastName(e.target.value)}
+                className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-xs outline-none focus:border-white/30 transition-all font-light"
+              />
+            </div>
           </div>
 
           {/* Upload Area */}
@@ -422,7 +429,7 @@ export default function App() {
                   {uploading ? "Uploading your moment..." : "Add to Album"}
                 </p>
                 <p className="text-white/30 text-[10px] font-light uppercase tracking-widest">
-                  {user ? "Photo or short video" : "Login to share your moments"}
+                  {(!firstName.trim() || !lastName.trim()) ? "Enter names above to share" : "Photo or short video"}
                 </p>
               </div>
             </label>
@@ -465,9 +472,25 @@ export default function App() {
                         </div>
                       </div>
                     )}
-                    <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500 flex items-end justify-between p-4">
-                       <span className="text-[7px] uppercase tracking-[0.4em] text-white/80">Moment #{memories.length - index}</span>
-                       <Maximize2 className="w-3 h-3 text-white/60" />
+                    
+                    {/* Delete Button overlay */}
+                    {memory.authorSecret === authorSecret && (
+                      <button 
+                        onClick={(e) => handleDelete(e, memory)}
+                        className="absolute top-3 right-3 z-20 p-2 bg-black/40 backdrop-blur-md rounded-full opacity-0 group-hover:opacity-100 transition-all hover:bg-red-500/40"
+                      >
+                        <Trash2 className="w-3 h-3 text-white" />
+                      </button>
+                    )}
+
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500 flex flex-col justify-end p-4">
+                       <span className="text-[10px] font-light text-white tracking-wide truncate mb-1">
+                         {memory.firstName} {memory.lastName}
+                       </span>
+                       <div className="flex justify-between items-center w-full">
+                         <span className="text-[7px] uppercase tracking-[0.4em] text-white/40">Moment #{memories.length - index}</span>
+                         <Maximize2 className="w-2 h-2 text-white/40" />
+                       </div>
                     </div>
                   </motion.div>
                 ))}
