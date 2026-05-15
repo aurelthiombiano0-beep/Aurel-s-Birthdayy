@@ -1,0 +1,50 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Validation for Memory entity
+    function isValidMemory(data) {
+      return data.keys().hasAll(['url', 'type', 'createdAt']) 
+             && data.keys().size() <= 10
+             && data.url is string && data.url.size() < 2048
+             && data.type in ['image', 'video']
+             && data.createdAt == request.time
+             && (data.authorId == null || data.authorId == request.auth.uid);
+    }
+
+    // Memories collection
+    match /memories/{memoryId} {
+      // Anyone can read (to see the shared album)
+      allow list, get: if true; 
+      
+      // Signed in users can create memories
+      allow create: if isSignedIn() 
+                    && isValidId(memoryId)
+                    && isValidMemory(incoming());
+      
+      // Memories are immutable once created (no update/delete by users for now)
+      allow update, delete: if false;
+    }
+  }
+}

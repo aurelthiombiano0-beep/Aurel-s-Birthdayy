@@ -4,8 +4,12 @@
  */
 
 import { motion, AnimatePresence } from "motion/react";
-import { Calendar, Clock, MapPin, QrCode, ArrowRight, Map } from "lucide-react";
-import { useEffect, useState, useMemo } from "react";
+import { Calendar, Clock, MapPin, QrCode, ArrowRight, Map, Camera, Play, LogIn, LogOut, Loader2, Maximize2, X as CloseIcon } from "lucide-react";
+import React, { useEffect, useState, useMemo, useRef } from "react";
+import { auth, db, storage } from "./lib/firebase";
+import { onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut, User } from "firebase/auth";
+import { collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, Timestamp } from "firebase/firestore";
+import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 
 const Particle = ({ delay }: { delay: number, key?: any }) => {
   return (
@@ -72,12 +76,92 @@ const Countdown = () => {
   );
 };
 
+interface Memory {
+  id: string;
+  url: string;
+  type: 'image' | 'video';
+  createdAt?: Timestamp;
+  authorId?: string;
+}
+
 export default function App() {
   const [mounted, setMounted] = useState(false);
+  const [memories, setMemories] = useState<Memory[]>([]);
+  const [user, setUser] = useState<User | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [selectedMedia, setSelectedMedia] = useState<Memory | null>(null);
 
   useEffect(() => {
     setMounted(true);
+    
+    // Auth Listener
+    const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+    });
+
+    // Firestore Listener
+    const q = query(collection(db, "memories"), orderBy("createdAt", "desc"));
+    const unsubscribeFirestore = onSnapshot(q, (snapshot) => {
+      const fetchedMemories = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Memory[];
+      setMemories(fetchedMemories);
+    });
+
+    return () => {
+      unsubscribeAuth();
+      unsubscribeFirestore();
+    };
   }, []);
+
+  const handleLogin = async () => {
+    try {
+      const provider = new GoogleAuthProvider();
+      await signInWithPopup(auth, provider);
+    } catch (error) {
+      console.error("Login failed", error);
+    }
+  };
+
+  const handleLogout = () => signOut(auth);
+
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    if (!user) {
+      alert("Please login to share memories.");
+      return;
+    }
+
+    setUploading(true);
+    
+    try {
+      const fileList = Array.from(files) as File[];
+      for (const file of fileList) {
+        const fileType = file.type.startsWith('video') ? 'video' : 'image';
+        const fileRef = ref(storage, `memories/${Date.now()}_${file.name}`);
+        
+        const snapshot = await uploadBytes(fileRef, file);
+        const url = await getDownloadURL(snapshot.ref);
+        
+        await addDoc(collection(db, "memories"), {
+          url,
+          type: fileType,
+          createdAt: serverTimestamp(),
+          authorId: user.uid,
+          authorName: user.displayName
+        });
+      }
+    } catch (error) {
+      console.error("Upload failed", error);
+      alert("Something went wrong with the upload. Check your connection.");
+    } finally {
+      setUploading(false);
+      if (e.target) e.target.value = '';
+    }
+  };
 
   return (
     <div className="relative min-h-screen w-full overflow-x-hidden bg-black flex flex-col items-center justify-start py-12 px-6 md:px-12 font-sans selection:bg-white/20">
@@ -115,12 +199,44 @@ export default function App() {
         initial={{ opacity: 0, y: -20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 1.2, ease: [0.16, 1, 0.3, 1] }}
-        className="z-10 flex flex-col items-center space-y-4 mb-16"
+        className="z-10 flex flex-col items-center space-y-4 mb-16 w-full max-w-[540px]"
       >
-        <div className="w-10 h-10 border border-white/20 rounded-full flex items-center justify-center bg-white/5 backdrop-blur-md">
-          <div className="w-4 h-4 bg-white rounded-full shadow-[0_0_10px_rgba(255,255,255,0.8)]"></div>
+        <div className="w-full flex justify-between items-center px-4">
+          <div className="flex-1" />
+          <div className="flex flex-col items-center space-y-4">
+            <div className="w-10 h-10 border border-white/20 rounded-full flex items-center justify-center bg-white/5 backdrop-blur-md">
+              <div className="w-4 h-4 bg-white rounded-full shadow-[0_0_10px_rgba(255,255,255,0.8)]"></div>
+            </div>
+            <span className="tracking-[0.6em] text-[10px] uppercase font-light opacity-60">Aurel Event</span>
+          </div>
+          <div className="flex-1 flex justify-end">
+            {user ? (
+              <button 
+                onClick={handleLogout}
+                className="group flex flex-col items-center space-y-1 opacity-40 hover:opacity-100 transition-opacity"
+              >
+                <div className="w-8 h-8 rounded-full border border-white/10 flex items-center justify-center bg-white/5 overflow-hidden">
+                  {user.photoURL ? (
+                    <img src={user.photoURL} alt={user.displayName || ""} className="w-full h-full object-cover" />
+                  ) : (
+                    <LogOut className="w-4 h-4 text-white" />
+                  )}
+                </div>
+                <span className="text-[7px] uppercase tracking-widest">Logout</span>
+              </button>
+            ) : (
+              <button 
+                onClick={handleLogin}
+                className="group flex flex-col items-center space-y-1 opacity-40 hover:opacity-100 transition-opacity"
+              >
+                <div className="w-8 h-8 rounded-full border border-white/10 flex items-center justify-center bg-white/5">
+                  <LogIn className="w-4 h-4 text-white" />
+                </div>
+                <span className="text-[7px] uppercase tracking-widest">Login</span>
+              </button>
+            )}
+          </div>
         </div>
-        <span className="tracking-[0.6em] text-[10px] uppercase font-light opacity-60">Aurel Event</span>
       </motion.header>
 
       {/* Main Content */}
@@ -261,6 +377,150 @@ export default function App() {
           </motion.a>
         </div>
       </motion.section>
+
+      {/* Memories Album Section */}
+      <motion.section
+        initial={{ opacity: 0, y: 40 }}
+        whileInView={{ opacity: 1, y: 0 }}
+        viewport={{ once: true }}
+        transition={{ duration: 1.5, delay: 0.2 }}
+        className="relative z-10 w-full max-w-[800px] mt-16 px-4"
+      >
+        <div className="glass-card rounded-[48px] p-8 md:p-16 flex flex-col items-center overflow-hidden">
+          <div className="text-center mb-12">
+            <p className="text-white/40 font-light italic text-sm tracking-widest mb-4">“Memories fade.<br/>Tonight lives forever.”</p>
+            <motion.h2 
+              initial={{ opacity: 0, filter: "blur(10px)" }}
+              whileInView={{ opacity: 1, filter: "blur(0px)" }}
+              className="text-3xl md:text-4xl font-extralight tracking-tight text-white mb-4 glow-text"
+            >
+              Memories Album ✨
+            </motion.h2>
+            <p className="text-white/30 font-light text-xs tracking-[0.3em] uppercase">Every moment. One shared album.</p>
+          </div>
+
+          {/* Upload Area */}
+          <div className="w-full max-w-lg mb-16">
+            <label className={`group relative block ${uploading ? 'cursor-wait' : 'cursor-pointer'}`}>
+              <input 
+                type="file" 
+                accept="image/*,video/*" 
+                multiple 
+                className="hidden" 
+                disabled={uploading}
+                onChange={handleUpload}
+              />
+              <div className={`border border-dashed border-white/20 rounded-[32px] p-10 md:p-14 text-center transition-all duration-500 ${uploading ? 'opacity-50' : 'group-hover:border-white/40 group-hover:bg-white/5'} backdrop-blur-sm`}>
+                <div className="w-16 h-16 rounded-full bg-white/5 border border-white/10 flex items-center justify-center mx-auto mb-6 group-hover:scale-110 transition-transform duration-500">
+                  {uploading ? (
+                    <Loader2 className="w-8 h-8 text-white/60 animate-spin" />
+                  ) : (
+                    <Camera className="w-8 h-8 text-white/40 group-hover:text-white/60" />
+                  )}
+                </div>
+                <p className="text-white/80 font-light text-sm mb-2 tracking-wide">
+                  {uploading ? "Uploading your moment..." : "Add to Album"}
+                </p>
+                <p className="text-white/30 text-[10px] font-light uppercase tracking-widest">
+                  {user ? "Photo or short video" : "Login to share your moments"}
+                </p>
+              </div>
+            </label>
+          </div>
+
+          {/* Gallery Grid */}
+          <AnimatePresence mode="popLayout">
+            {memories.length > 0 ? (
+              <motion.div 
+                layout
+                className="grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-4 w-full"
+              >
+                {memories.map((memory, index) => (
+                  <motion.div
+                    key={memory.id}
+                    layout
+                    initial={{ opacity: 0, scale: 0.9 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    transition={{ duration: 0.8 }}
+                    onClick={() => setSelectedMedia(memory)}
+                    className="relative aspect-square rounded-[24px] overflow-hidden glass-card group cursor-pointer border border-white/10"
+                  >
+                    {memory.type === 'image' ? (
+                      <img 
+                        src={memory.url} 
+                        alt="Event Memory" 
+                        loading="lazy"
+                        className="w-full h-full object-cover transition-transform duration-1000 group-hover:scale-110"
+                      />
+                    ) : (
+                      <div className="relative w-full h-full">
+                        <video 
+                          src={memory.url} 
+                          className="w-full h-full object-cover"
+                          muted
+                          playsInline
+                        />
+                        <div className="absolute inset-0 flex items-center justify-center bg-black/20 group-hover:bg-black/10 transition-colors">
+                          <Play className="w-8 h-8 text-white/60 group-hover:scale-110 transition-transform" />
+                        </div>
+                      </div>
+                    )}
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500 flex items-end justify-between p-4">
+                       <span className="text-[7px] uppercase tracking-[0.4em] text-white/80">Moment #{memories.length - index}</span>
+                       <Maximize2 className="w-3 h-3 text-white/60" />
+                    </div>
+                  </motion.div>
+                ))}
+              </motion.div>
+            ) : (
+              <div className="py-20 text-center">
+                <p className="text-white/20 font-light text-sm tracking-widest uppercase">The album is waiting for its first memory.</p>
+              </div>
+            )}
+          </AnimatePresence>
+        </div>
+      </motion.section>
+
+      {/* Fullscreen Preview Modal */}
+      <AnimatePresence>
+        {selectedMedia && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] bg-black/95 backdrop-blur-2xl flex items-center justify-center p-4"
+          >
+            <button 
+              onClick={() => setSelectedMedia(null)}
+              className="absolute top-8 right-8 z-[110] text-white/40 hover:text-white transition-colors p-2"
+            >
+              <CloseIcon className="w-8 h-8 md:w-10 md:h-10" />
+            </button>
+            
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="relative w-full max-w-5xl max-h-[85vh] flex items-center justify-center"
+            >
+              {selectedMedia.type === 'image' ? (
+                <img 
+                  src={selectedMedia.url} 
+                  className="max-w-full max-h-[85vh] object-contain rounded-xl shadow-2xl"
+                  alt="Fullscreen view"
+                />
+              ) : (
+                <video 
+                  src={selectedMedia.url} 
+                  className="max-w-full max-h-[85vh] object-contain rounded-xl shadow-2xl"
+                  controls
+                  autoPlay
+                />
+              )}
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Footer */}
       <motion.footer 

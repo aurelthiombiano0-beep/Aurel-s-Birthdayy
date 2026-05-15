@@ -1,0 +1,22 @@
+{
+  "entities": {
+    "memory": {
+      "title": "Memory",
+      "description": "A shared photo or video memory from the event",
+      "type": "object",
+      "properties": {
+        "url": { "type": "string", "description": "URL of the memory file" },
+        "type": { "type": "string", "enum": ["image", "video"], "description": "Type of media" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "When it was uploaded" },
+        "authorId": { "type": "string", "description": "UID of the uploader" }
+      },
+      "required": ["url", "type", "createdAt"]
+    }
+  },
+  "firestore": {
+    "memories": {
+      "schema": "memory",
+      "description": "Shared collection of all event memories"
+    }
+  }
+}
