@@ -10,9 +10,9 @@
         "createdAt": { "type": "string", "format": "date-time", "description": "When it was uploaded" },
         "firstName": { "type": "string", "description": "First name of uploader" },
         "lastName": { "type": "string", "description": "Last name of uploader" },
-        "authorSecret": { "type": "string", "description": "Secret ID to allow deletion by uploader" }
+        "authorId": { "type": "string", "description": "UID of the uploader (anonymous)" }
       },
-      "required": ["url", "type", "createdAt", "firstName", "lastName", "authorSecret"]
+      "required": ["url", "type", "createdAt", "firstName", "lastName", "authorId"]
     }
   },
   "firestore": {

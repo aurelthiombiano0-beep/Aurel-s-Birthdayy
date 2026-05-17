@@ -25,47 +25,25 @@ service cloud.firestore {
 
     // Validation for Memory entity
     function isValidMemory(data) {
-      return data.keys().hasAll(['url', 'type', 'createdAt', 'firstName', 'lastName', 'authorSecret']) 
-             && data.keys().size() <= 12
+      return data.keys().hasAll(['url', 'type', 'createdAt', 'firstName', 'lastName', 'authorId']) 
+             && data.keys().size() == 6
              && data.url is string && data.url.size() < 2048
              && data.type in ['image', 'video']
              && data.createdAt == request.time
              && data.firstName is string && data.firstName.size() <= 50
              && data.lastName is string && data.lastName.size() <= 50
-             && data.authorSecret is string && data.authorSecret.size() <= 100;
+             && data.authorId == request.auth.uid;
     }
 
     // Memories collection
     match /memories/{memoryId} {
       allow list, get: if true; 
       
-      allow create: if isValidId(memoryId)
+      allow create: if isSignedIn() 
+                    && isValidId(memoryId)
                     && isValidMemory(incoming());
       
-      // Allow deletion if the provided authorSecret matches the one in the document
-      // Since rules are executed server-side, this validates against the data being deleted
-      allow delete: if existing().authorSecret != null 
-                    && request.auth == null // Not using auth, but the client must send something to identify?
-                    // Actually, for delete, we need a way to verify the user has the secret.
-                    // We can check if a custom header or field in the request matches, but Firestore rules
-                    // for DELETE only have access to 'resource' (existing).
-                    // To allow 'self-delete' without auth, we can use a specific 'reason' or just rely on a check.
-                    // However, 'request' during DELETE doesn't have a payload.
-                    // A better way for anonymous delete is to enable Auth Anonymous or use a flag.
-                    // BUT the user specifically said "REMOVE LOGIN SYSTEM".
-                    // Let's use a simple check: if the client provides the secret in an update/delete? 
-                    // No, delete is just delete.
-                    // Wait, I can't check a payload on DELETE.
-                    // Let's use Auth Anonymous behind the scenes? No, user said NO login/signup.
-                    // Okay, let's allow delete if the document has a secret and the client "knows" it.
-                    // This is hard without auth. 
-                    // Let's stick to: allow delete if true for now OR just create only.
-                    // Actually, I'll allow delete if the document is less than 24h old? No.
-                    // Let's just use a simple rule: allow delete: if true; for the demo, 
-                    // OR I can use a custom field check during an 'update' to mark it as deleted?
-                    // No, "Delete feature" was requested.
-                    // Let's just allow it for now since it's a private-ish event album.
-                    allow delete: if true; 
+      allow delete: if isSignedIn() && existing().authorId == request.auth.uid;
       
       allow update: if false;
     }
