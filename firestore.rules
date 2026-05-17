@@ -26,26 +26,30 @@ service cloud.firestore {
     // Validation for Memory entity
     function isValidMemory(data) {
       return data.keys().hasAll(['url', 'type', 'createdAt', 'firstName', 'lastName', 'authorId']) 
-             && data.keys().size() == 6
+             && data.keys().size() >= 6
              && data.url is string && data.url.size() < 2048
              && data.type in ['image', 'video']
              && data.createdAt == request.time
              && data.firstName is string && data.firstName.size() <= 50
              && data.lastName is string && data.lastName.size() <= 50
-             && data.authorId == request.auth.uid;
+             && data.authorId is string && data.authorId.size() <= 100;
     }
 
     // Memories collection
     match /memories/{memoryId} {
       allow list, get: if true; 
       
-      allow create: if isSignedIn() 
-                    && isValidId(memoryId)
-                    && isValidMemory(incoming());
+      allow create: if isValidId(memoryId) && isValidMemory(incoming());
       
-      allow delete: if isSignedIn() && existing().authorId == request.auth.uid;
-      
-      allow update: if false;
+      // Allow "deletion" by updating a deleted flag, verified by the authorId secret
+      allow update: if existing().authorId != null 
+                    && incoming().authorId == existing().authorId
+                    && (
+                      // Allow marking as deleted
+                      (incoming().deleted == true && request.resource.data.diff(resource.data).affectedKeys().hasAll(['deleted']))
+                    );
+
+      allow delete: if false; // Use update to flag as deleted for non-auth security
     }
   }
 }

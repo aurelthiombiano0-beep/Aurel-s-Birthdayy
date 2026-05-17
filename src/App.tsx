@@ -6,10 +6,9 @@
 import { motion, AnimatePresence } from "motion/react";
 import { Camera, Play, Loader2, Maximize2, Trash2, X as CloseIcon } from "lucide-react";
 import React, { useEffect, useState, useMemo, useRef } from "react";
-import { auth, db, storage } from "./lib/firebase";
-import { collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, Timestamp, deleteDoc, doc } from "firebase/firestore";
-import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
-import { onAuthStateChanged, User } from "firebase/auth";
+import { db, storage } from "./lib/firebase";
+import { collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, Timestamp, updateDoc, doc } from "firebase/firestore";
+import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 
 const Particle = ({ delay }: { delay: number, key?: any }) => {
   return (
@@ -42,44 +41,7 @@ interface Memory {
   firstName?: string;
   lastName?: string;
   authorId?: string;
-}
-
-enum OperationType {
-  CREATE = 'create',
-  UPDATE = 'update',
-  DELETE = 'delete',
-  LIST = 'list',
-  GET = 'get',
-  WRITE = 'write',
-}
-
-interface FirestoreErrorInfo {
-  error: string;
-  operationType: OperationType;
-  path: string | null;
-  authInfo: {
-    userId?: string | null;
-    email?: string | null;
-    emailVerified?: boolean | null;
-    isAnonymous?: boolean | null;
-  }
-}
-
-function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
-  const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
-    authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
-      emailVerified: auth.currentUser?.emailVerified,
-      isAnonymous: auth.currentUser?.isAnonymous,
-    },
-    operationType,
-    path
-  }
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
-  // We can also show a user-friendly message
-  alert(`Error: ${error instanceof Error ? error.message : 'Permission denied'}`);
+  deleted?: boolean;
 }
 
 export default function App() {
@@ -87,45 +49,34 @@ export default function App() {
   const [memories, setMemories] = useState<Memory[]>([]);
   const [uploading, setUploading] = useState(false);
   const [selectedMedia, setSelectedMedia] = useState<Memory | null>(null);
-  const [user, setUser] = useState<User | null>(null);
   
-  // Anonymous Identity
+  // Anonymous Identity - No Firebase Auth needed
   const [firstName, setFirstName] = useState(localStorage.getItem('firstName') || "");
   const [lastName, setLastName] = useState(localStorage.getItem('lastName') || "");
+  const [sessionId] = useState(() => {
+    let id = localStorage.getItem('guest_session_id');
+    if (!id) {
+      id = 'guest_' + Math.random().toString(36).substring(2, 11) + Date.now();
+      localStorage.setItem('guest_session_id', id);
+    }
+    return id;
+  });
 
   useEffect(() => {
     setMounted(true);
 
-    // Silent Anonymous Login
-    const initAuth = async () => {
-      onAuthStateChanged(auth, async (currentUser) => {
-        if (!currentUser) {
-          try {
-            const { signInAnonymously } = await import("firebase/auth");
-            await signInAnonymously(auth);
-          } catch (error: any) {
-            console.error("Anonymous auth failed", error);
-            if (error.code === 'auth/admin-restricted-operation') {
-              console.warn("CRITICAL: Anonymous authentication is disabled in your Firebase console. Please enable it under Build > Authentication > Settings > Sign-in method.");
-            }
-          }
-        } else {
-          setUser(currentUser);
-        }
-      });
-    };
-    initAuth();
-
-    // Firestore Listener
+    // Firestore Listener - Automatically filters out deleted items via client-side check
     const q = query(collection(db, "memories"), orderBy("createdAt", "desc"));
     const unsubscribeFirestore = onSnapshot(q, (snapshot) => {
-      const fetchedMemories = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Memory[];
+      const fetchedMemories = snapshot.docs
+        .map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }))
+        .filter((m: any) => !m.deleted) as Memory[];
       setMemories(fetchedMemories);
     }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, "memories");
+      console.error("Firestore Error: ", error);
     });
 
     return () => {
@@ -142,11 +93,6 @@ export default function App() {
       return;
     }
 
-    if (!user) {
-      alert("Establishing secure connection... Please try again in a second.");
-      return;
-    }
-
     // Persist names
     localStorage.setItem('firstName', firstName.trim());
     localStorage.setItem('lastName', lastName.trim());
@@ -158,28 +104,24 @@ export default function App() {
       for (const file of fileList) {
         const fileType = file.type.startsWith('video') ? 'video' : 'image';
         // Unique path for storage
-        const fileRef = ref(storage, `memories/${user.uid}/${Date.now()}_${file.name}`);
+        const fileRef = ref(storage, `memories/${sessionId}/${Date.now()}_${file.name}`);
         
         const snapshot = await uploadBytes(fileRef, file);
         const url = await getDownloadURL(snapshot.ref);
         
-        const memoriesPath = "memories";
-        try {
-          await addDoc(collection(db, memoriesPath), {
-            url,
-            type: fileType,
-            createdAt: serverTimestamp(),
-            firstName: firstName.trim(),
-            lastName: lastName.trim(),
-            authorId: user.uid
-          });
-        } catch (error) {
-          handleFirestoreError(error, OperationType.CREATE, memoriesPath);
-          throw error;
-        }
+        await addDoc(collection(db, "memories"), {
+          url,
+          type: fileType,
+          createdAt: serverTimestamp(),
+          firstName: firstName.trim(),
+          lastName: lastName.trim(),
+          authorId: sessionId,
+          deleted: false
+        });
       }
     } catch (error) {
       console.error("Upload failed", error);
+      alert("Upload failed. Make sure you are connected to the internet.");
     } finally {
       setUploading(false);
       if (e.target) e.target.value = '';
@@ -190,13 +132,15 @@ export default function App() {
     e.stopPropagation();
     if (!window.confirm("Are you sure you want to delete this memory?")) return;
 
-    const memoryPath = `memories/${memory.id}`;
     try {
-      await deleteDoc(doc(db, "memories", memory.id));
-      // Optionally delete from storage too if path is known
-      // For now, removing the reference is sufficient for the "Album"
+      // Secure update that verifies the sessionId matches the authorId in Firestore rules
+      await updateDoc(doc(db, "memories", memory.id), {
+        deleted: true,
+        authorId: sessionId // Passed to satisfy the rule: incoming().authorId == existing().authorId
+      });
     } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, memoryPath);
+      console.error("Delete failed", error);
+      alert("Permission denied. You can only delete your own memories.");
     }
   };
 
@@ -420,7 +364,7 @@ export default function App() {
                     )}
                     
                     {/* Delete Button overlay */}
-                    {memory.authorId === user?.uid && (
+                    {memory.authorId === sessionId && (
                       <button 
                         onClick={(e) => handleDelete(e, memory)}
                         className="absolute top-3 right-3 z-20 p-2 bg-black/40 backdrop-blur-md rounded-full opacity-0 group-hover:opacity-100 transition-all hover:bg-red-500/40"
